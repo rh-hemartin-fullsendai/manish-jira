@@ -1,0 +1,108 @@
+name: fullsend-my-agent
+
+permissions:
+  actions: write
+  contents: read
+  id-token: write
+  issues: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_key:
+        description: "Issue key"
+        required: true
+        type: string
+      issue_source:
+        description: "Issue source: jira or github"
+        required: true
+        type: string
+        default: "github"
+
+concurrency:
+  group: my-agent-${{ inputs.issue_key || 'unknown' }}
+  cancel-in-progress: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo (for harness reading)
+        uses: actions/checkout@v6
+
+      - name: Checkout target repo
+        uses: actions/checkout@v6
+        with:
+          path: target-repo
+
+      - name: Checkout upstream defaults
+        uses: actions/checkout@v6
+        with:
+          repository: fullsend-ai/fullsend
+          ref: v0
+          path: .defaults
+          sparse-checkout: |
+            internal/scaffold/fullsend-repo/
+
+      - name: Prepare workspace (upstream defaults + repo overrides)
+        run: |
+          set -euo pipefail
+          SRC=".defaults/internal/scaffold/fullsend-repo"
+          LAYERED_DIRS="agents skills schemas harness policies scripts env"
+          for dir in ${LAYERED_DIRS}; do
+            if [[ -d "${SRC}/${dir}" ]]; then
+              mkdir -p ".fullsend/${dir}"
+              cp -r "${SRC}/${dir}/." ".fullsend/${dir}/"
+            fi
+          done
+          for dir in ${LAYERED_DIRS}; do
+            if [[ -d ".fullsend/customized/${dir}" ]]; then
+              find ".fullsend/customized/${dir}" -type f ! -name '.gitkeep' -print0 \
+                | while IFS= read -r -d '' f; do
+                    rel="${f#".fullsend/customized/"}"
+                    mkdir -p ".fullsend/$(dirname "${rel}")"
+                    cp "${f}" ".fullsend/${rel}"
+                  done
+            fi
+          done
+          rm -rf .defaults
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}
+          project_id: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}
+
+      - name: Prepare sandbox credentials
+        run: bash .fullsend/scripts/prepare-sandbox-credentials.sh
+
+      - name: Install fullsend CLI
+        uses: fullsend-ai/fullsend@v0
+        with:
+          agent: __install_only__
+
+      - name: Run my-agent
+        env:
+          ISSUE_KEY: ${{ inputs.issue_key }}
+          ISSUE_SOURCE: ${{ inputs.issue_source || 'github' }}
+          JIRA_HOST: ${{ secrets.JIRA_HOST }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_VERTEX_PROJECT_ID: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}
+          CLOUD_ML_REGION: ${{ vars.FULLSEND_GCP_REGION }}
+          MY_VAR: ABC
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          fullsend run jira-agent \
+            --fullsend-dir "$GITHUB_WORKSPACE/.fullsend" \
+            --output-dir "$GITHUB_WORKSPACE/output" \
+            --target-repo "$GITHUB_WORKSPACE/target-repo"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fullsend-my-agent
+          path: ${{ github.workspace }}/output

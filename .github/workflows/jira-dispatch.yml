@@ -1,0 +1,31 @@
+name: my-agent-dispatch
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  dispatch:
+    if: >-
+      github.event.comment.user.type != 'Bot'
+      && startsWith(github.event.comment.body, '/jira-triage')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh workflow run jira-agent.yml \
+            --repo "$REPO" \
+            -f issue_key="$ISSUE_NUMBER" \
+            -f issue_source="github"
+
+          gh api "repos/${REPO}/issues/comments/${{ github.event.comment.id }}/reactions" \
+            -f content="rocket" --silent 2>/dev/null || true
