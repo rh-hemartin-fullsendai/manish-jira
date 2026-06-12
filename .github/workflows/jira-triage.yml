@@ -170,5 +170,5 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fullsend-triage
+          name: fullsend-triage-${{ inputs.issue_key }}
           path: ${{ github.workspace }}/output
