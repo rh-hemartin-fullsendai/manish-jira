@@ -33,15 +33,15 @@ jobs:
             echo "::error::Invalid issue_key format: ${ISSUE_KEY}"
             exit 1
           fi
-          CONFIG_FILE="config.yaml"
+          CONFIG_FILE=".jira.yml"
           if [[ ! -f "${CONFIG_FILE}" ]]; then
-            echo "::error::config.yaml not found"
+            echo "::error::.jira.yml not found"
             exit 1
           fi
           ENROLLED=$(PROJECT_KEY="${PROJECT_KEY}" python3 -c "
           import os, yaml
           key = os.environ['PROJECT_KEY']
-          with open('config.yaml') as f:
+          with open('.jira.yml') as f:
               cfg = yaml.safe_load(f)
           projects = cfg.get('jira_projects', [])
           keys = [p.get('project_key','') for p in projects]
