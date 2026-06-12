@@ -1,0 +1,5 @@
+version: 1
+jira_projects:
+  - project_key: KFLUXINFRA
+    host: stage-redhat.atlassian.net
+    linked_github_repos: []
