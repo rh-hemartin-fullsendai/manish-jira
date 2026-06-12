@@ -93,10 +93,33 @@ echo "Control label strip complete."
 
 echo "::notice::Step 2: Fetching issue data for ${ISSUE_KEY}"
 
-ISSUE_JSON=$(jira_get "${JIRA_BASE}/issue/${ISSUE_KEY}?expand=names")
+ISSUE_JSON=$(jira_get "${JIRA_BASE}/issue/${ISSUE_KEY}?expand=names,renderedFields")
 
 SUMMARY=$(echo "$ISSUE_JSON" | jq -r '.fields.summary // ""')
-DESCRIPTION=$(echo "$ISSUE_JSON" | jq -r '.fields.description // "" | if type == "object" then (.content // [] | map(.content // [] | map(.text // "") | join("")) | join("\n")) else . end')
+# Use Jira's server-side HTML rendering to preserve lists, tables, code blocks.
+# The naive ADF .text extraction misses bulletList/orderedList/panel/codeBlock nodes.
+DESCRIPTION=""
+DESCRIPTION_HTML=$(echo "$ISSUE_JSON" | jq -r '.renderedFields.description // ""')
+if [[ -n "$DESCRIPTION_HTML" ]]; then
+  DESCRIPTION=$(echo "$DESCRIPTION_HTML" | python3 -c "
+import sys, html, re
+raw = sys.stdin.read()
+# Strip HTML tags, convert common elements to plain text
+text = re.sub(r'<br\s*/?>', '\n', raw)
+text = re.sub(r'<li>', '- ', text)
+text = re.sub(r'</li>', '\n', text)
+text = re.sub(r'<p>', '', text)
+text = re.sub(r'</p>', '\n', text)
+text = re.sub(r'<[^>]+>', '', text)
+text = html.unescape(text)
+# Collapse multiple blank lines
+text = re.sub(r'\n{3,}', '\n\n', text)
+print(text.strip())
+" 2>/dev/null || echo "")
+fi
+if [[ -z "$DESCRIPTION" ]]; then
+  DESCRIPTION=$(echo "$ISSUE_JSON" | jq -r '.fields.description // "" | if type == "object" then (.content // [] | map(.content // [] | map(.text // "") | join("")) | join("\n")) else . end')
+fi
 STATUS=$(echo "$ISSUE_JSON" | jq -r '.fields.status.name // ""')
 PRIORITY=$(echo "$ISSUE_JSON" | jq -r '.fields.priority.name // ""')
 ISSUE_TYPE=$(echo "$ISSUE_JSON" | jq -r '.fields.issuetype.name // ""')
@@ -136,10 +159,33 @@ CHILDREN_JSON=$(jira_get "${JIRA_BASE}/search?jql=parent=${ISSUE_KEY}&fields=sum
 CHILD_COUNT=$(echo "$CHILDREN_JSON" | jq 'length')
 echo "Children: ${CHILD_COUNT}"
 
-# Fetch comments
-COMMENTS_JSON=$(jira_get "${JIRA_BASE}/issue/${ISSUE_KEY}/comment?maxResults=50" 2>/dev/null \
-  | jq '[.comments[] | {author: .author.emailAddress, created: .created, body: (.body | if type == "object" then (.content // [] | map(.content // [] | map(.text // "") | join("")) | join("\n")) else . end)}]' \
+# Fetch comments with rendered HTML bodies to preserve lists/tables/code
+COMMENTS_JSON=$(jira_get "${JIRA_BASE}/issue/${ISSUE_KEY}/comment?maxResults=50&expand=renderedBody" 2>/dev/null \
+  | jq '[.comments[] | {author: .author.emailAddress, created: .created, body_html: (.renderedBody // ""), body_adf: (.body | if type == "object" then (.content // [] | map(.content // [] | map(.text // "") | join("")) | join("\n")) else (. // "") end)}]' \
   || echo "[]")
+# Convert HTML comment bodies to plain text, falling back to ADF extraction
+COMMENTS_JSON=$(echo "$COMMENTS_JSON" | python3 -c "
+import sys, json, html, re
+def html_to_text(h):
+    if not h:
+        return ''
+    t = re.sub(r'<br\s*/?>', '\n', h)
+    t = re.sub(r'<li>', '- ', t)
+    t = re.sub(r'</li>', '\n', t)
+    t = re.sub(r'<p>', '', t)
+    t = re.sub(r'</p>', '\n', t)
+    t = re.sub(r'<[^>]+>', '', t)
+    t = html.unescape(t)
+    t = re.sub(r'\n{3,}', '\n\n', t)
+    return t.strip()
+comments = json.load(sys.stdin)
+for c in comments:
+    body = html_to_text(c.get('body_html', '')) or c.get('body_adf', '')
+    c['body'] = body
+    del c['body_html']
+    del c['body_adf']
+json.dump(comments, sys.stdout)
+" 2>/dev/null || echo "$COMMENTS_JSON" | jq '[.[] | {author, created, body: (.body_html // .body_adf // "")} | del(.body_html, .body_adf)]')
 
 COMMENT_COUNT=$(echo "$COMMENTS_JSON" | jq 'length')
 echo "Comments: ${COMMENT_COUNT}"

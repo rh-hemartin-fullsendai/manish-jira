@@ -314,9 +314,15 @@ fi
 
 echo "Posting comment..."
 
+# Strip HTML comment markers from the comment body before ADF conversion.
+# The agent includes <!-- fullsend:jira-triage-agent --> markers for sticky
+# comment detection, but Jira's ADF renderer shows them as visible text.
+# The post-script re-adds the marker as a separate ADF node below.
+COMMENT_CLEAN=$(printf '%s' "${COMMENT}" | sed 's/<!-- fullsend:jira-triage-agent -->//g' | sed '/^[[:space:]]*$/d')
+
 # Convert markdown to ADF.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ADF_BODY=$(printf '%s' "${COMMENT}" | python3 "${SCRIPT_DIR}/markdown-to-adf.py")
+ADF_BODY=$(printf '%s' "${COMMENT_CLEAN}" | python3 "${SCRIPT_DIR}/markdown-to-adf.py")
 
 COMMENT_MARKER="<!-- fullsend:jira-triage-agent -->"
 
